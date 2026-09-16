@@ -1,0 +1,7 @@
+ingestion/output/
+ingestion/ingestion_output/
+agent_script/
+.venv
+__pycache__/
+*.py[cod]
+*$py.class
