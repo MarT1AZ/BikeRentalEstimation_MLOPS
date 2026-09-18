@@ -3,6 +3,7 @@ from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction import DictVectorizer
 import mlflow
+import mlflow.sklearn
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
@@ -19,6 +20,7 @@ from hyperopt import STATUS_OK, Trials, fmin, hp, space_eval, tpe
 
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URL"))
 mlflow.set_experiment("bikerental-knn-regression-model")
+mlflow.sklearn.autolog(disable=True)  # Keep MLflow logging manual for each trial.
 
 
 def get_dvc_output_hash(dvc_lock_path, output_path):
@@ -154,8 +156,12 @@ def objective(
     y_test_df,
     temp_scaler,
     rental_scaler,
+    data_path,
+    dvc_data_hash,
+    random_state,
+    max_trials,
 ):
-    """INPUT: Hyperopt parameters, train/test frames, and fitted scalers.
+    """INPUT: Hyperopt parameters, train/test frames, scalers, and run metadata.
 
     RETURN: A Hyperopt result dictionary containing test MSE and status.
     """
@@ -173,12 +179,21 @@ def objective(
         mse = mean_squared_error(y_test_df.squeeze(), predictions)
 
         mlflow.log_params(params)
+        mlflow.log_param("data_path", data_path)  # Record the source dataset for this trial.
+        mlflow.log_param("dvc_data_hash", dvc_data_hash)  # Record the exact DVC output version.
+        mlflow.log_param("random_state", random_state)  # Record Hyperopt's search seed.
+        mlflow.log_param("max_trials", max_trials)  # Record the Hyperopt trial limit.
         mlflow.log_metric("test_mse", mse)
         mlflow.sklearn.log_model(
             sk_model=knn_model,
             artifact_path="knn_model",
-            skops_trusted_types=True,
-            serialization_format="skops"
+            serialization_format="skops",
+            skops_trusted_types=[
+                "sklearn.metrics._dist_metrics.EuclideanDistance64",
+                "sklearn.metrics._dist_metrics.ManhattanDistance64",
+                "sklearn.neighbors._kd_tree.KDTree",
+                "sklearn.neighbors._ball_tree.BallTree",
+            ],
         )  # Log this trial's packaged model securely.
 
     return {"loss": mse, "status": STATUS_OK}
@@ -212,10 +227,6 @@ def run_hyperopt_search(
 
     trials = Trials()
     with mlflow.start_run(run_name="knn_regressor_hyperopt"):
-        mlflow.log_param("data_path", data_path)  # Record the source dataset for reproducibility.
-        mlflow.log_param("dvc_data_hash", dvc_data_hash)  # Record the exact DVC output version.
-        mlflow.log_param("random_state", random_state)  # Record Hyperopt's search seed.
-        mlflow.log_param("max_trials", max_trials)  # Record the Hyperopt trial limit.
         best_raw = fmin(
             fn=lambda params: objective(
                 params,
@@ -225,6 +236,10 @@ def run_hyperopt_search(
                 y_test_df,
                 temp_scaler,
                 rental_scaler,
+                data_path,
+                dvc_data_hash,
+                random_state,
+                max_trials,
             ),
             space=search_space,
             algo=tpe.suggest,
