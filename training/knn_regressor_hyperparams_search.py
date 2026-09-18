@@ -177,6 +177,7 @@ def objective(
         mlflow.sklearn.log_model(
             sk_model=knn_model,
             artifact_path="knn_model",
+            skops_trusted_types=True,
             serialization_format="skops"
         )  # Log this trial's packaged model securely.
 
