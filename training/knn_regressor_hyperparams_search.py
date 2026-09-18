@@ -175,13 +175,9 @@ def objective(
         mlflow.log_params(params)
         mlflow.log_metric("test_mse", mse)
         mlflow.sklearn.log_model(
-            knn_model,
+            sk_model=knn_model,
             artifact_path="knn_model",
-            skops_trusted_types=[
-                "sklearn.metrics._dist_metrics.EuclideanDistance64",
-                "sklearn.neighbors._kd_tree.KDTree",
-                "sklearn.neighbors._ball_tree.BallTree",
-            ],
+            serialization_format="skops"
         )  # Log this trial's packaged model securely.
 
     return {"loss": mse, "status": STATUS_OK}
