@@ -1,0 +1,19 @@
+schema: '2.0'
+stages:
+  ingest_bike_rentals:
+    cmd: bash -c "cd ingestion && bash ingestion_run.sh"
+    deps:
+    - path: ingestion/ingestion.py
+      hash: md5
+      md5: ad482dab0fd35b1b6195cc3999036e46
+      size: 11105
+    - path: ingestion/ingestion_run.sh
+      hash: md5
+      md5: 66378b32cf056c2f91c9cd3a03053738
+      size: 407
+      isexec: true
+    outs:
+    - path: ingestion/ingestion_run/output/bike_rental_hourly_data_2022_2025.csv
+      hash: md5
+      md5: 4ae9543b79b424ace6159626ab7eb53e
+      size: 1568830
