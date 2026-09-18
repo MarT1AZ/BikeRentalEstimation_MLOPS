@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
-from io import BytesIO, StringIO
+from io import BytesIO
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 from urllib.request import urlopen
 from zipfile import ZipFile
 
-import boto3
 import pandas as pd
 import s3fs
 
@@ -73,59 +71,6 @@ def load_monthly_zip(
         with zip_file.open(csv_files[0]) as csv_file:
             return pd.read_csv(csv_file)
 
-
-def save_dataframe_to_s3(
-    dataframe: pd.DataFrame,
-    remote_s3_uri: str,
-    s3_client,
-) -> str:
-    """Upload a dataframe to an S3 URI and return the created object version ID."""
-    remote_s3_uri_parts = urlparse(remote_s3_uri)
-    if (
-        remote_s3_uri_parts.scheme != "s3"
-        or not remote_s3_uri_parts.netloc
-        or not remote_s3_uri_parts.path.strip("/")
-    ):
-        raise ValueError(f"Expected an S3 URI such as s3://bucket/key, got: {remote_s3_uri}")
-
-    csv_buffer = StringIO()
-    dataframe.to_csv(csv_buffer, index=False)
-    response = s3_client.put_object(
-        Bucket=remote_s3_uri_parts.netloc,
-        Key=remote_s3_uri_parts.path.lstrip("/"),
-        Body=csv_buffer.getvalue().encode("utf-8"),
-        ContentType="text/csv",
-    )
-    return response.get("VersionId", "null")
-
-
-def parse_s3_tag(raw_tag: str) -> dict[str, str]:
-    """Parse one CLI tag in ``KEY=VALUE`` form for S3 object tagging."""
-    key, separator, value = raw_tag.partition("=")
-    if not separator or not key:
-        raise argparse.ArgumentTypeError("S3 tags must use KEY=VALUE format")
-    return {"Key": key, "Value": value}
-
-
-def tag_s3_object_version(
-    remote_s3_uri: str,
-    version_id: str,
-    tags: list[dict[str, str]],
-    s3_client,
-) -> None:
-    """Apply tags to the exact version returned by the preceding PutObject call."""
-    if not tags:
-        return
-    if version_id in {"", "null", None}:
-        raise RuntimeError("S3 object tagging requires a VersionId from PutObject")
-
-    remote_s3_uri_parts = urlparse(remote_s3_uri)
-    s3_client.put_object_tagging(
-        Bucket=remote_s3_uri_parts.netloc,
-        Key=remote_s3_uri_parts.path.lstrip("/"),
-        VersionId=version_id,
-        Tagging={"TagSet": tags},
-    )
 
 
 def aggregate_rental_counts(
@@ -251,17 +196,8 @@ if __name__ == "__main__":
         help="Optional local output directory",
     )
     parser.add_argument(
-        "--save-s3",
-        dest="remote_s3_output",
-        help="S3 output directory URI",
-    )
-    parser.add_argument(
-        "--s3-tag",
-        dest="s3_tags",
-        action="append",
-        type=parse_s3_tag,
-        metavar="KEY=VALUE",
-        help="Optional S3 object tag; repeat for multiple tags",
+        "--output-filename",
+        help="Optional CSV filename; otherwise a year/month-based name is generated",
     )
     args = parser.parse_args()
 
@@ -270,10 +206,6 @@ if __name__ == "__main__":
         parser.error("--start-year must be less than or equal to --end-year")
     if args.start_year == args.end_year and args.start_month > args.end_month:
         parser.error("For one year, --start-month must be less than or equal to --end-month")
-    if args.s3_tags and not args.remote_s3_output:
-        parser.error("--s3-tag requires --save-s3")
-    if args.s3_tags and len({tag["Key"] for tag in args.s3_tags}) != len(args.s3_tags):
-        parser.error("Each --s3-tag key must be unique")
 
     # Use the configured categories; discovery is intentionally skipped.
     categories = CATEGORIES
@@ -335,26 +267,12 @@ if __name__ == "__main__":
     print(f"Time points missing weather temperature: {final_df['temperature'].isna().sum():,}")
 
     # Save the final DataFrame locally on every run.
-    output_filename = (
+    output_filename = args.output_filename or (
         f"bike_rental_y_{args.start_year}_{args.end_year}"
         f"_m_{args.start_month}_{args.end_month}.csv"
-    )  # Include the selected year and month window in the output name.
+    )
     if args.local_output_dir:
         os.makedirs(args.local_output_dir, exist_ok=True)
         local_output_dir = args.local_output_dir
         local_final_path = os.path.join(local_output_dir, output_filename)
         final_df.to_csv(local_final_path, index=False)
-    if args.remote_s3_output:
-        remote_s3_base = args.remote_s3_output.rstrip("/")
-        remote_s3_final_path = f"{remote_s3_base}/{output_filename}"
-        s3_client = boto3.client("s3")
-        final_version_id = save_dataframe_to_s3(final_df, remote_s3_final_path, s3_client)
-        if args.s3_tags:
-            tag_s3_object_version(
-                remote_s3_final_path,
-                final_version_id,
-                args.s3_tags,
-                s3_client,
-            )
-            print(f"Applied S3 tags to version {final_version_id}")
-        print(f"Saved final data to {remote_s3_final_path} (version ID: {final_version_id})")
