@@ -1,5 +1,6 @@
-ingestion/output/
-ingestion/ingestion_output/
+
+model_experimentation/output/
+ingestion/ingestion_run/
 agent_script/
 .venv
 __pycache__/
