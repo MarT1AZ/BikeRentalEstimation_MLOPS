@@ -1,0 +1,8 @@
+stages:
+  ingest_bike_rentals:
+    cmd: bash -c "cd ingestion && bash ingestion_run.sh"
+    deps:
+    - ingestion/ingestion.py
+    - ingestion/ingestion_run.sh
+    outs:
+    - ingestion/ingestion_run/output/bike_rental_hourly_data_2022_2025.csv

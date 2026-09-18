@@ -1,0 +1,4 @@
+[core]
+    remote = storage
+['remote "storage"']
+    url = s3://mlops-project-bucket-602343785232-ap-southeast-1-an/dvcstore
