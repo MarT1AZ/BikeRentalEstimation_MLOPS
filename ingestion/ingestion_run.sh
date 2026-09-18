@@ -21,9 +21,9 @@ echo "S3 bucket name : $S3_BUCKET"
 
 uv run python ingestion.py \
   --start-year 2022 \
-  --end-year 2022 \
+  --end-year 2025 \
   --start-month 1 \
-  --end-month 2 \
+  --end-month 12 \
   --cache-zip \
   --cache-path ingestion_run/cache \
   --save-s3 "s3://$S3_BUCKET/extract_data" \
