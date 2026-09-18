@@ -27,6 +27,6 @@ uv run python ingestion.py \
   --cache-zip \
   --cache-path ingestion_run/cache \
   --save-s3 "s3://$S3_BUCKET/extract_data" \
-  --s3-tag "description=test_run" \
+  --s3-tag "description=full_ingestion_2022_to_2025_1_to_12" \
   --s3-tag "script_commit_id=$py_commit_id" \
   --s3-tag "bash_script_commit_id=$sh_commit_id"
