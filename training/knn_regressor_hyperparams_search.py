@@ -180,6 +180,7 @@ def objective(
             skops_trusted_types=[
                 "sklearn.metrics._dist_metrics.EuclideanDistance64",
                 "sklearn.neighbors._kd_tree.KDTree",
+                "sklearn.neighbors._ball_tree.BallTree",
             ],
         )  # Log this trial's packaged model securely.
 
