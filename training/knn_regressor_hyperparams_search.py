@@ -276,14 +276,7 @@ def main(random_state, max_trials):
             "scale_target": scale_target
     }
     
-    (
-        X_train_df,
-        y_train_df,
-        X_test_df,
-        y_test_df,
-        feature_scalers,
-        target_scaler,
-    ) = prep_data(df)
+    X_train_df, y_train_df, X_test_df, y_test_df = prep_data(df)
     feature_scalers, target_scaler = prep_scaler(
         X_train_df,
         y_train_df,
