@@ -41,3 +41,26 @@ When editing code, add comments for meaningful behavior changes when requested. 
 
 For DVC-managed datasets, save the generated output locally and let DVC track and push the dataset. Do not add custom S3 upload, version, or tagging logic to ingestion unless explicitly requested.
 
+
+## Planning implementation guideline
+
+
+I would like you to grill me like ask me if the behavior or design of what gonna be implemented is not yet well defined enough for you to actually implement it, you need to ask me until we get a common ground
+
+
+## Common terminology
+
+Please settle for common terminologies between user and you, so that it is easier to understand what the technical stuff you are trying to explain as user do not want to read throught a paragraph just to understand an explanation of an technical issue.
+
+You can keep track of common terms under COMMON_TERMINOLOGIES.md which user can also look at it
+
+You can keep it in format {Term} : {Explantion}
+
+## Handling configuration file
+
+There are many config file sued by Git, DVC and UV. These file should not be manually editted by you but it should be updated using command line with the respectative command
+
+## Pytest
+
+run "uv run pytest -v -s" no extra configuration needed
+

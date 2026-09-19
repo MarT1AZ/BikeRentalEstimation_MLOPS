@@ -393,6 +393,11 @@ dependencies = [
     { name = "skops" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "dvc", extras = ["s3"], specifier = ">=3.67.1" },
@@ -408,6 +413,9 @@ requires-dist = [
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "skops", specifier = ">=0.15.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "billiard"
