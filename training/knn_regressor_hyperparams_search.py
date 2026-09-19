@@ -19,7 +19,6 @@ from hyperopt import STATUS_OK, Trials, fmin, hp, space_eval, tpe
 
 
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URL"))
-mlflow.set_experiment("bikerental-knn-regression-model")
 mlflow.sklearn.autolog(disable=True)  # Keep MLflow logging manual for each trial.
 
 
@@ -67,6 +66,9 @@ def prep_data(df):
         prepared_df["classic_bike_casual_count"]
         + prepared_df["classic_bike_member_count"]
     )
+
+    # Keep the model and evaluation scope to hours 6 through 20, inclusive.
+    prepared_df = prepared_df[prepared_df["Hour"].between(6, 20)].copy()
 
     feature_columns = ["Month", "Day", "Hour", "temperature"]
     train_mask = prepared_df["Year"] != 2025
@@ -194,24 +196,16 @@ def run_hyperopt_search(
     feature_scalers,
     target_scaler,
     run_metadata,
+    search_space,
     max_trials,
 ):
-    """INPUT: Prepared train/test frames, scalers, run metadata, and trial limit.
+    """INPUT: Prepared data, scalers, metadata, one search space, and trial count.
 
-    RETURN: The fitted best model, best parameters, and held-out test MSE.
+    RETURN: None. Logs each Hyperopt trial to its own MLflow run.
     """
-    search_space = {
-        "n_neighbors": hp.quniform("n_neighbors", 1, 10, 1),
-        "weights": hp.choice("weights", ["uniform", "distance"]),
-        "algorithm": hp.choice("algorithm", ["ball_tree", "kd_tree"]),
-        "leaf_size": hp.quniform("leaf_size", 10, 40, 5),
-        "p": hp.choice("p", [1, 2]),
-        "n_jobs": hp.choice("n_jobs", [None]),
-    }
-
     random_state = run_metadata["random_state"]
     trials = Trials()
-    best_raw = fmin(
+    fmin(
         fn=lambda params: objective(
             params,
             X_train_df,
@@ -231,7 +225,6 @@ def run_hyperopt_search(
     )
 
 
-
 def parse_args():
     """RETURN: Command-line arguments for the training workflow."""
     parser = argparse.ArgumentParser(description="Run Hyperopt KNN training.")
@@ -245,17 +238,23 @@ def parse_args():
         "--max-trials",
         type=int,
         default=50,
-        help="Maximum number of Hyperopt trials.",
+        help="Number of Hyperopt trials for each weight mode.",
+    )
+    parser.add_argument(
+        "--experiment-name",
+        default="bikerental-knn-regression-model",
+        help="MLflow experiment name.",
     )
     return parser.parse_args()
 
 
 @flow
-def main(random_state, max_trials):
-    """INPUT: Hyperopt seed and maximum trial count.
+def main(random_state, max_trials, experiment_name):
+    """INPUT: Hyperopt seed, trial count per weight mode, and MLflow experiment name.
 
     RETURN: None. Runs the KNN data-preparation and search workflow.
     """
+    mlflow.set_experiment(experiment_name)
     project_root = Path(__file__).resolve().parents[1]
     data_path = str(
         project_root
@@ -284,6 +283,27 @@ def main(random_state, max_trials):
         scale_target=scale_target,
     )
     
+    search_spaces = {
+        "uniform": {
+            "n_neighbors": hp.quniform("uniform_n_neighbors", 1, 20, 2),
+            "weights": hp.choice("uniform_weights", ["uniform"]),
+            "algorithm": hp.choice("uniform_algorithm", ["ball_tree", "kd_tree"]),
+            "leaf_size": hp.quniform("uniform_leaf_size", 10, 40, 5),
+            "p": hp.choice("uniform_p", [1, 2]),
+            "n_jobs": hp.choice("uniform_n_jobs", [None]),
+        },
+        "distance": {
+            "n_neighbors": hp.quniform("distance_n_neighbors", 1, 20, 2),
+            "weights": hp.choice("distance_weights", ["distance"]),
+            "algorithm": hp.choice("distance_algorithm", ["ball_tree", "kd_tree"]),
+            "leaf_size": hp.quniform("distance_leaf_size", 10, 40, 5),
+            "p": hp.choice("distance_p", [1, 2]),
+            "n_jobs": hp.choice("distance_n_jobs", [None]),
+        },
+    }
+    if max_trials <= 0:
+        raise ValueError("max_trials must be a positive number")
+
     run_hyperopt_search(
         X_train_df,
         y_train_df,
@@ -292,10 +312,22 @@ def main(random_state, max_trials):
         feature_scalers,
         target_scaler,
         run_metadata,
+        search_spaces["uniform"],
+        max_trials,
+    )
+    run_hyperopt_search(
+        X_train_df,
+        y_train_df,
+        X_test_df,
+        y_test_df,
+        feature_scalers,
+        target_scaler,
+        run_metadata,
+        search_spaces["distance"],
         max_trials,
     )
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.random_state, args.max_trials)
+    main(args.random_state, args.max_trials, args.experiment_name)
