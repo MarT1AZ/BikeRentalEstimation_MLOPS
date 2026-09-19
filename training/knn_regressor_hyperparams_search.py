@@ -52,114 +52,101 @@ def load_data(data_path):
 
 
 @task
-def prep_data_and_scaler(df):
+def prep_data(df):
     """INPUT: Raw bike-rental DataFrame.
 
-    RETURN: Chronologically split train/test feature records and target frames,
-    plus scalers fitted on the training period only.
+    RETURN: Chronologically split train/test feature and target DataFrames.
     """
     prepared_df = df.copy()
 
-    # Agent Task
-    # - Feature : Month,Day,Hour,temperature
-    # - target : total_classic_bike_rental = classic_bike_casual_count + classic_bike_member_count
-
-    # Sort by date time, but do not include the helper column in the features.
     prepared_df["datetime"] = pd.to_datetime(
         prepared_df[["Year", "Month", "Day", "Hour"]]
     )
     prepared_df = prepared_df.sort_values("datetime").reset_index(drop=True)
-
     prepared_df["total_classic_bike_rental"] = (
         prepared_df["classic_bike_casual_count"]
         + prepared_df["classic_bike_member_count"]
     )
 
-    # Keep both feature and target frames raw here: the model packages each
-    # scaler and applies the transforms exactly once during fit/predict.
     feature_columns = ["Month", "Day", "Hour", "temperature"]
     train_mask = prepared_df["Year"] != 2025
     train_df = prepared_df.loc[train_mask].copy()
     test_df = prepared_df.loc[~train_mask].copy()
 
-    X_train_df = train_df[feature_columns].copy()
-    X_test_df = test_df[feature_columns].copy()
-
-    # turn to dict as model pipeline want dict vectorizer
-    X_train_records = X_train_df.to_dict(orient="records")
-    X_test_records = X_test_df.to_dict(orient="records")
-
-    y_train_df = train_df[["total_classic_bike_rental"]].copy()
-    y_test_df = test_df[["total_classic_bike_rental"]].copy()
-
-    temp_scaler = StandardScaler()
-    rental_scaler = StandardScaler()
-
-    # Fit the temperature scaler on training observations before passing it to the pipeline.
-    temp_scaler.fit(X_train_df[["temperature"]])
-
-    # Fit the rental scaler on training observations before packaging it.
-    rental_scaler.fit(y_train_df[["total_classic_bike_rental"]])
-
-    # End task
-
     return (
-        X_train_records,
-        y_train_df,
-        X_test_records,
-        y_test_df,
-        temp_scaler,
-        rental_scaler,
+        train_df[feature_columns].copy(),
+        train_df[["total_classic_bike_rental"]].copy(),
+        test_df[feature_columns].copy(),
+        test_df[["total_classic_bike_rental"]].copy(),
     )
 
 
-def build_knn_model(params, temp_scaler, rental_scaler):
-    """INPUT: KNN parameters and required feature/target scaler instances.
+def prep_scaler(X_train, y_train, columns_to_scale, scale_target):
+    """INPUT: Training features/target, feature columns, and target-scale flag.
 
-    RETURN: A complete estimator containing temperature scaling, target
-    scaling, and the KNN regressor. Predictions are returned in rental counts.
+    RETURN: List of (column name, scaler, DictVectorizer column index) tuples,
+    and a fitted target scaler or None.
     """
-    if temp_scaler is None or rental_scaler is None:
-        raise ValueError("temp_scaler and rental_scaler must be provided")
+    missing_columns = [column for column in columns_to_scale if column not in X_train.columns]
+    if missing_columns:
+        raise ValueError(f"Columns not found in X_train: {missing_columns}")
 
-    # DictVectorizer sorts these fields as Day, Hour, Month, temperature.
-    # Keep temperature at index 3 so the scaler is applied to the intended field.
-    feature_pipeline = Pipeline(
-        [
-            ("vectorizer", DictVectorizer(sparse=False, sort=True)),
+    sorted_columns = sorted(X_train.columns)
+    feature_scalers = []
+    for column in columns_to_scale:
+        scaler = StandardScaler()
+        scaler.fit(X_train[[column]])
+        feature_scalers.append((column, scaler, sorted_columns.index(column)))
+
+    target_scaler = None
+    if scale_target:
+        target_scaler = StandardScaler()
+        target_scaler.fit(y_train)
+
+    return feature_scalers, target_scaler
+
+
+def build_knn_model(params, feature_scalers, target_scaler):
+    """INPUT: KNN parameters, feature scaler tuples, and optional target scaler.
+
+    RETURN: A KNN estimator containing the requested feature scalers and, when
+    provided, the target scaler for automatic inverse transformation.
+    """
+    feature_steps = [("vectorizer", DictVectorizer(sparse=False, sort=True))]
+    if feature_scalers:
+        feature_steps.append(
             (
-                "temperature_scaler",
+                "column_scalers",
                 ColumnTransformer(
-                    transformers=[("temperature", temp_scaler, [3])],
+                    transformers=[
+                        (column, scaler, [column_index])
+                        for column, scaler, column_index in feature_scalers
+                    ],
                     remainder="passthrough",
                 ),
-            ),
-        ]
-    )
+            )
+        )
+
     knn_pipeline = Pipeline(
-        [
-            ("features", feature_pipeline),
-            ("knn", KNeighborsRegressor(**params)),
-        ]
+        feature_steps + [("knn", KNeighborsRegressor(**params))]
     )
+    if target_scaler is None:
+        return knn_pipeline
     return TransformedTargetRegressor(
         regressor=knn_pipeline,
-        transformer=rental_scaler,
+        transformer=target_scaler,
     )
 
 
 def objective(
     params,
-    X_train_records,
+    X_train_df,
     y_train_df,
-    X_test_records,
+    X_test_df,
     y_test_df,
-    temp_scaler,
-    rental_scaler,
-    data_path,
-    dvc_data_hash,
-    random_state,
-    max_trials,
+    feature_scalers,
+    target_scaler,
+    run_metadata,
 ):
     """INPUT: Hyperopt parameters, train/test frames, scalers, and run metadata.
 
@@ -170,8 +157,10 @@ def objective(
     params["leaf_size"] = int(params["leaf_size"])
 
     with mlflow.start_run(nested=True):
-        # Build the complete KNN estimator from the current Hyperopt trial parameters.
-        knn_model = build_knn_model(params, temp_scaler, rental_scaler)
+        # Convert DataFrames to records only at the DictVectorizer model boundary.
+        X_train_records = X_train_df.to_dict(orient="records")
+        X_test_records = X_test_df.to_dict(orient="records")
+        knn_model = build_knn_model(params, feature_scalers, target_scaler)
         knn_model.fit(X_train_records, y_train_df.squeeze())
 
         # The packaged target transformer returns predictions in rental counts.
@@ -179,10 +168,7 @@ def objective(
         mse = mean_squared_error(y_test_df.squeeze(), predictions)
 
         mlflow.log_params(params)
-        mlflow.log_param("data_path", data_path)  # Record the source dataset for this trial.
-        mlflow.log_param("dvc_data_hash", dvc_data_hash)  # Record the exact DVC output version.
-        mlflow.log_param("random_state", random_state)  # Record Hyperopt's search seed.
-        mlflow.log_param("max_trials", max_trials)  # Record the Hyperopt trial limit.
+        mlflow.log_params(run_metadata)  # Record shared metadata for this trial.
         mlflow.log_metric("test_mse", mse)
         mlflow.sklearn.log_model(
             sk_model=knn_model,
@@ -201,18 +187,16 @@ def objective(
 
 @task
 def run_hyperopt_search(
-    X_train_records,
+    X_train_df,
     y_train_df,
-    X_test_records,
+    X_test_df,
     y_test_df,
-    temp_scaler,
-    rental_scaler,
-    data_path,
-    dvc_data_hash,
-    random_state,
+    feature_scalers,
+    target_scaler,
+    run_metadata,
     max_trials,
 ):
-    """INPUT: Prepared train/test frames, scalers, data path, random seed, and trial limit.
+    """INPUT: Prepared train/test frames, scalers, run metadata, and trial limit.
 
     RETURN: The fitted best model, best parameters, and held-out test MSE.
     """
@@ -225,44 +209,27 @@ def run_hyperopt_search(
         "n_jobs": hp.choice("n_jobs", [None]),
     }
 
+    random_state = run_metadata["random_state"]
     trials = Trials()
-    with mlflow.start_run(run_name="knn_regressor_hyperopt"):
-        best_raw = fmin(
-            fn=lambda params: objective(
-                params,
-                X_train_records,
-                y_train_df,
-                X_test_records,
-                y_test_df,
-                temp_scaler,
-                rental_scaler,
-                data_path,
-                dvc_data_hash,
-                random_state,
-                max_trials,
-            ),
-            space=search_space,
-            algo=tpe.suggest,
-            max_evals=max_trials,
-            trials=trials,
-            rstate=np.random.default_rng(random_state),
-            show_progressbar=False,
-        )
+    best_raw = fmin(
+        fn=lambda params: objective(
+            params,
+            X_train_df,
+            y_train_df,
+            X_test_df,
+            y_test_df,
+            feature_scalers,
+            target_scaler,
+            run_metadata,
+        ),
+        space=search_space,
+        algo=tpe.suggest,
+        max_evals=max_trials,
+        trials=trials,
+        rstate=np.random.default_rng(random_state),
+        show_progressbar=False,
+    )
 
-    #     # Resolve Hyperopt's encoded choices into final estimator parameters.
-    #     best_params = space_eval(search_space, best_raw)
-    #     best_params["n_neighbors"] = int(best_params["n_neighbors"])
-    #     best_params["leaf_size"] = int(best_params["leaf_size"])
-
-    #     # Fit the selected parameters again for the parent-run summary metric.
-    #     best_model = build_knn_model(best_params, temp_scaler, rental_scaler)
-    #     best_model.fit(X_train_records, y_train_df.squeeze())
-    #     predictions = best_model.predict(X_test_df)
-    #     test_mse = mean_squared_error(y_test_df.squeeze(), predictions)
-
-    #     mlflow.log_metric("best_test_mse", test_mse)
-
-    # return best_model, best_params, test_mse
 
 
 def parse_args():
@@ -297,24 +264,41 @@ def main(random_state, max_trials):
     dvc_lock_path = project_root / "dvc.lock"
     dvc_data_hash = get_dvc_output_hash(dvc_lock_path, data_path)
     df = load_data(data_path)
+
+    columns_to_scale=["Month","Day","Hour","temperature"]
+    scale_target = True
+
+    run_metadata = {
+            "data_path": data_path,
+            "dvc_data_hash": dvc_data_hash,
+            "random_state": random_state,
+            "columns_to_scale":columns_to_scale,
+            "scale_target": scale_target
+    }
+    
     (
-        X_train_records,
+        X_train_df,
         y_train_df,
-        X_test_records,
+        X_test_df,
         y_test_df,
-        temp_scaler,
-        rental_scaler,
-    ) = prep_data_and_scaler(df)
+        feature_scalers,
+        target_scaler,
+    ) = prep_data(df)
+    feature_scalers, target_scaler = prep_scaler(
+        X_train_df,
+        y_train_df,
+        columns_to_scale=columns_to_scale,
+        scale_target=scale_target,
+    )
+    
     run_hyperopt_search(
-        X_train_records,
+        X_train_df,
         y_train_df,
-        X_test_records,
+        X_test_df,
         y_test_df,
-        temp_scaler,
-        rental_scaler,
-        data_path,
-        dvc_data_hash,
-        random_state,
+        feature_scalers,
+        target_scaler,
+        run_metadata,
         max_trials,
     )
 
